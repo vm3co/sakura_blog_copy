@@ -12,7 +12,7 @@ import json
 import time
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse, unquote, parse_qs
 import re
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -55,6 +55,7 @@ RETRY_STATUS_CODES = [500, 502, 503, 504] # 遇到這些 HTTP 狀態碼才重試
 # --- 頁面結構相關（若官網改版導致抓取失效，來這裡對照新結構調整 selector）---
 SELECTOR_ARTICLE_LIST   = "div.member-blog-listm"    # 列表頁中包住文章連結的區塊
 SELECTOR_ARTICLE_LINK   = 'a[href*="diary/detail"]'  # 文章連結
+SELECTOR_PAGER_LINK     = 'div.com-pager a[href*="diary/blog/list"]'  # 列表頁自帶的換頁按鈕（1 2 3 → 等）
 SELECTOR_NOTFOUND_TITLE = "div.cate-hero h2.title"   # Not Found 頁的標題元素
 SELECTOR_NOTFOUND_COL   = "div.col-r"                # Not Found 頁的內容欄
 NOTFOUND_TITLE_TEXT     = "Not Found"                # Not Found 頁標題應有的文字
@@ -379,6 +380,7 @@ class SakurazakaBlogArchiver(BaseWebArchiver):
                 else:
                     print("    警告：找不到 member-blog-listm 區塊，可能版型有變。")
 
+                self._fix_pager_links(soup)
                 self._add_navigation(soup, page)
                 return True
 
@@ -421,6 +423,27 @@ class SakurazakaBlogArchiver(BaseWebArchiver):
         else:
             print("  沒有下載失敗的文章。")
         print("=" * 60)
+
+    def _fix_pager_links(self, soup):
+        """
+        列表頁本身自帶的換頁按鈕（1 2 3 ... → 等，位於 div.com-pager）連結
+        原本是網站的 root-relative 路徑（例如 /s/s46/diary/blog/list?...&page=1&...），
+        直接在本機開啟會失效。這裡把它們改寫成對應的本機檔名 blog_list_{page}.html，
+        讓使用者也能透過原本的頁碼按鈕在已備份的列表頁之間切換。
+        """
+        for a in soup.select(SELECTOR_PAGER_LINK):
+            href = a.get('href')
+            if not href:
+                continue
+            query = parse_qs(urlparse(href).query)
+            page_values = query.get('page')
+            if not page_values:
+                continue
+            try:
+                target_page = int(page_values[0])
+            except ValueError:
+                continue
+            a['href'] = f"blog_list_{target_page}.html"
 
     def _add_navigation(self, soup, page):
         nav_html = f"""
